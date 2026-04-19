@@ -1,0 +1,102 @@
+# =============================================================================
+# AFFECTIVE MANIFOLD — CENTRAL CONFIGURATION
+# Edit this file before running any scripts.
+# All scripts import from here. You only need to edit ONE file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# DATA PATHS — edit these to match your filesystem
+# -----------------------------------------------------------------------------
+paths:
+  artemis_csv:       "/data/artemis/artemis_dataset_release_v0.csv"   # ArtEmis CSV
+  apolo_dir:         "/data/apolo/"                                    # APOLO root dir
+  wikiart_images:    "/data/wikiart/images/"                           # WikiArt image root
+  wikiart_metadata:  "/data/wikiart/wikiart_metadata.csv"             # WikiArt movement CSV
+  multivalence_csv:  "/data/your_multivalence_scores.csv"             # Your prior research scores
+  output_dir:        "/data/outputs/affective_manifold/"               # All outputs go here
+
+# -----------------------------------------------------------------------------
+# PHASE 1 — DATA PIPELINE AND AFFECTIVE GEOMETRY
+# -----------------------------------------------------------------------------
+phase1:
+  sbert_model:       "all-mpnet-base-v2"    # DO NOT CHANGE — specified in paper
+  subgraph_n:        10000                   # target size of stratified subgraph
+  emotion_clusters:  20                      # k for JSD k-medoids clustering
+  knn_k:             10                      # k for affective k-NN graph
+  sinkhorn_eps:      0.1                     # Wasserstein regularisation
+  coverage_threshold: 0.70                  # WikiArt coverage threshold for Path A/B
+  ricci_alpha:       0.5                     # Ollivier-Ricci alpha parameter
+  ricci_max_cores:   32                      # max CPU cores for Ricci computation
+  delta_percentile:  10                      # percentile of CLIP edge distances for delta
+  # Russell circumplex coordinates for 8 ArtEmis emotions [valence, arousal]
+  # Values from Warriner 2013 norms mapped to [-1,1] scale
+  emotion_coordinates:
+    amusement:   [ 0.76,  0.60]
+    awe:         [ 0.30,  0.70]
+    contentment: [ 0.72, -0.30]
+    excitement:  [ 0.80,  0.80]
+    anger:       [-0.70,  0.70]
+    disgust:     [-0.60,  0.20]
+    fear:        [-0.50,  0.60]
+    sadness:     [-0.65, -0.50]
+
+# -----------------------------------------------------------------------------
+# PHASE 2 — ENCODER TRAINING
+# -----------------------------------------------------------------------------
+phase2:
+  clip_model:        "ViT-L/14"
+  embed_dim:         256
+  decoder_lr_mult:   0.333              # decoder LR = encoder LR * this
+  base_lr:           1.0e-4
+  batch_size:        256
+  num_epochs:        50
+  warmup_ot_only:    10                 # epochs with L_OT only
+  add_lperp_epoch:   10                 # epoch to add L_perp
+  add_lcurv_epoch:   20                 # epoch to add L_curv
+  lcurv_conflict_threshold: 0.80        # if L_curv at ep30 > this * ep20 value → halve gamma
+  lambda_perp:       0.1                # L_perp weight
+  gamma_curv:        0.05               # L_curv weight (adaptive, may be halved)
+  triplet_margin:    0.5
+  num_triplets:      500000
+  num_seeds:         5                  # main training seeds
+  ablation_seeds:    3                  # seeds for ablation runs C/D
+  device:            "cuda"
+  num_workers:       8
+  checkpoint_epochs: [10, 30, 50]       # epochs to generate decoder checkpoint figures
+
+# -----------------------------------------------------------------------------
+# PHASE 3 — AGENT NAVIGATION
+# -----------------------------------------------------------------------------
+phase3:
+  max_steps_multiplier: 3              # hard stop = max_steps_multiplier * |V|
+  delta_expand_factor:  1.10           # expand delta by this if zero candidates
+  beam_width:           5              # curvature-guided beam search width
+  convergence_w2:       0.05           # W2 threshold for declaring convergence
+  saddle_kappa_thresh:  -0.10          # Ricci curvature threshold for saddle flag
+  query_parser: "local"              # "local" (no API key) or "anthropic" (Claude API)
+  llm_model:    "claude-sonnet-4-6"   # only used when query_parser = "anthropic"
+  num_test_queries:     50
+
+# -----------------------------------------------------------------------------
+# PHASE 4 — EXPERIMENTS
+# -----------------------------------------------------------------------------
+phase4:
+  bootstrap_n:          1000           # bootstrap iterations for CI
+  bootstrap_level:      0.95           # confidence level
+  fdr_alpha:            0.05           # BH-FDR significance level
+  min_stratum_n:        30             # flag strata below this as underpowered
+  robustness_threshold: 0.5            # ablation within this * std = robust
+  anomaly_std_thresh:   2.0            # trigger re-run if result > this many std from expected
+  # Pre-specified expected ranges for Days 20-23 buffer decision rules
+  expected_ranges:
+    p5_vs_clip_min_delta: 0.05         # P@5 must exceed CLIP by >= 5pp
+    ricci_ling_min_rho:   0.15         # |rho| > 0.15 for linguistic divergence finding
+    trajectory_auc_delta: 0.10         # geodesic must beat greedy by >= 10% AUC
+    decoder_w2_max:       0.20         # decoder W2 error must be < 0.20
+    ablation_min_drop_std: 1.0         # ablation drop must exceed 1 std to be meaningful
+
+# -----------------------------------------------------------------------------
+# PHASE 5 — PAPER
+# -----------------------------------------------------------------------------
+phase5:
+  latex_template_dir: "./paper/"       # where to put the LaTeX files
