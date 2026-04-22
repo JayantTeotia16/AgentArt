@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import networkx as nx
 import json
+import pickle
 import torch
 import torch.nn.functional as F
 from pathlib import Path
@@ -58,7 +59,8 @@ For ambiguous/multivalent descriptions, spread probability across multiple emoti
 class AffinityGraph:
     """Wrapper around the pre-computed affective k-NN graph."""
     def __init__(self, graph_path, subgraph_path, clip_embs_path, ricci_targets_path):
-        self.G = nx.read_gpickle(str(graph_path))
+        with open(graph_path, "rb") as f:
+            self.G = pickle.load(f)
         self.df = pd.read_parquet(subgraph_path)
         self.clip_embs = np.load(clip_embs_path).astype(np.float32)
         self.ricci_targets = np.load(ricci_targets_path).astype(np.float32)
@@ -258,10 +260,12 @@ class AffectiveNavigationAgent:
                 self.log.warning(f"  Step {step}: All neighbours visited. Fallback to nearest-node.")
                 break
 
-            # Lexicographic constraint: semantic anchor as hard filter
-            # Filter candidates by CLIP drift <= delta
+            # Lexicographic constraint: semantic coherence as hard filter.
+            # Constrain step-to-step CLIP drift (current → candidate), not cumulative
+            # drift from start_node — the intent is inter-step coherence, not a ball
+            # around the query image that tightens as the trajectory advances.
             filtered = [n for n in candidates
-                        if self.graph.clip_distance(start_node, n) <= current_delta]
+                        if self.graph.clip_distance(current_node, n) <= current_delta]
 
             if len(filtered) == 0:
                 # Expand delta for this step only and log exception
@@ -270,7 +274,7 @@ class AffectiveNavigationAgent:
                 self.log.warning(f"  Step {step}: Zero candidates after CLIP filter. "
                                  f"Expanding delta to {current_delta:.4f} (exception #{delta_exceptions})")
                 filtered = [n for n in candidates
-                            if self.graph.clip_distance(start_node, n) <= current_delta]
+                            if self.graph.clip_distance(current_node, n) <= current_delta]
                 current_delta = self.delta  # reset for next step
                 if len(filtered) == 0:
                     filtered = candidates[:1]  # last resort: take any candidate
@@ -358,6 +362,9 @@ def build_agent(config_path="config/config.yaml"):
         clip_embs_path=out_p1 / "clip_embeddings_subgraph.npy",
         ricci_targets_path=out_p1 / "node_ricci_targets.npy",
     )
+    # Pre-compute all-pairs shortest paths so downstream analyses (retrieval,
+    # trajectory AUC vs geodesic baseline) can query them in O(1). One-time cost.
+    graph.precompute_shortest_paths()
     C = np.load(out_p1 / "cost_matrix_A_russell.npy")
     step5_summary = json.load(open(out_p1 / "step5_summary.json"))
     delta = float(step5_summary["delta"])

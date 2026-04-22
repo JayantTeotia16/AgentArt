@@ -51,31 +51,6 @@ class EmotionDecoder(nn.Module):
     def forward(self, z):
         return F.softmax(self.net(z), dim=-1)
 
-class AffectiveEncoder(nn.Module):
-    def __init__(self, clip_model, embed_dim=256):
-        super().__init__()
-        self.clip = clip_model
-        # Freeze CLIP
-        for p in self.clip.parameters():
-            p.requires_grad_(False)
-        clip_dim = self.clip.visual.output_dim
-        self.affective_head = AffectiveHead(input_dim=clip_dim, embed_dim=embed_dim)
-        self.decoder = EmotionDecoder(embed_dim=embed_dim)
-
-    def encode(self, images):
-        with torch.no_grad():
-            clip_feats = self.clip.encode_image(images).float()
-        z = self.affective_head(clip_feats)
-        return z
-
-    def decode(self, z):
-        return self.decoder(z)
-
-    def forward(self, images):
-        z = self.encode(images)
-        mu_hat = self.decode(z)
-        return z, mu_hat
-
 # ── Losses ────────────────────────────────────────────────────────────────────
 
 def loss_ot(z_a, z_p, z_n, margin=0.5):
@@ -91,22 +66,36 @@ def loss_perp(z_aff, z_clip):
     cross = torch.mm(z_aff_n.T, z_clip_n) / z_aff_n.shape[0]
     return torch.norm(cross, p="fro") ** 2
 
-def loss_curv(z_aff, anchor_idxs, kappa_targets, kappa_targets_tensor):
+def loss_curv(z_aff, anchor_idxs, kappa_targets, kappa_targets_tensor, k_neighbours=10):
     """
     Sparse anchor-point curvature regulariser.
-    For each anchor painting in the batch, penalise squared difference
-    between kNN curvature in current Z_aff and pre-computed graph kappa.
+
+    For each anchor in the batch, compute a kNN-based local curvature proxy
+    in the current Z_aff space, then regress against pre-computed graph kappa.
+    The proxy is the negated mean cosine distance to the k nearest neighbours
+    within the batch: denser local neighbourhoods → higher proxy, matching the
+    sign convention of Ollivier-Ricci curvature (positive = clustered).
+
+    Both proxy and target are z-normalised within the batch so scales align.
     """
-    if len(anchor_idxs) == 0:
+    B = z_aff.shape[0]
+    if B < 3:
         return torch.tensor(0.0, device=z_aff.device)
-    z_anchors = z_aff[anchor_idxs]
-    # Estimate local curvature as mean pairwise distance in embedding space
-    if len(z_anchors) < 2:
-        return torch.tensor(0.0, device=z_aff.device)
-    dists = 1 - torch.mm(z_anchors, z_anchors.T)
-    embed_curvature = dists.mean(dim=-1)  # proxy: mean distance to all anchors
-    target = kappa_targets_tensor[anchor_idxs]
-    return F.mse_loss(embed_curvature, target)
+
+    # z_aff is already the batch of anchor embeddings (batch_size == len(anchor_idxs));
+    # anchor_idxs are global painting indices, used only to look up kappa targets.
+    dists = 1 - torch.mm(z_aff, z_aff.T)                  # [B, B]
+    dists = dists + torch.eye(B, device=z_aff.device) * 1e6  # mask self
+    k = min(k_neighbours, B - 1)
+    knn_vals, _ = dists.topk(k, dim=-1, largest=False)    # [B, k] smallest distances
+    embed_curvature = -knn_vals.mean(dim=-1)              # higher = denser = +curvature
+
+    idx_tensor = torch.as_tensor(anchor_idxs, device=z_aff.device, dtype=torch.long)
+    target = kappa_targets_tensor[idx_tensor]
+
+    emb_norm = (embed_curvature - embed_curvature.mean()) / (embed_curvature.std() + 1e-8)
+    tgt_norm = (target - target.mean()) / (target.std() + 1e-8)
+    return F.mse_loss(emb_norm, tgt_norm)
 
 def loss_decoder(mu_hat, mu_true):
     """Cross-entropy decoder loss against ground-truth emotion distribution."""

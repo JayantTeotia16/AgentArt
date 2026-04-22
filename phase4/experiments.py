@@ -131,8 +131,7 @@ def exp3_ricci_validation(cfg, out, log, phase1_out):
 
     # 3b: partial correlation + mediation
     from phase1.step6_validation_and_triplets import partial_correlation, mediation_analysis
-    import pandas as pd as _pd
-    controls = _pd.DataFrame({"utt_len": utt_len, "ttr": ttr})
+    controls = pd.DataFrame({"utt_len": utt_len, "ttr": ttr})
     partial_rho, partial_p = partial_correlation(ricci, ling_div, controls)
     log.info(f"  3b partial rho={partial_rho:.4f}, p={partial_p:.4e}")
     med_results = mediation_analysis(ricci, entropy, ling_div)

@@ -13,6 +13,7 @@ Run: bash scripts/phase1_step5.sh
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import pickle
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -69,10 +70,17 @@ def run(config_path="config/config.yaml"):
     else:
         import ot
         W2 = np.zeros((n, n), dtype=np.float32)
-        for i in tqdm(range(n), desc="W2 rows"):
-            for j in range(i+1, n):
-                d = float(ot.sinkhorn2(mu_matrix[i], mu_matrix[j], C, eps, numItermax=200)[0])
-                W2[i, j] = W2[j, i] = d
+        # POT's sinkhorn2 accepts a 1-D source vs a (dim, n_hists) stack of targets
+        # and returns all n_hists distances in one call — avoids n² Python overhead
+        # by vectorising the inner loop (~10–100× speedup on GPU-backed POT, and
+        # a big win on CPU too).
+        for i in tqdm(range(n - 1), desc="W2 rows"):
+            a = mu_matrix[i]                         # (dim,)
+            b = mu_matrix[i + 1:].T                  # (dim, n - i - 1)
+            row = ot.sinkhorn2(a, b, C, eps, numItermax=200)  # (n - i - 1,)
+            row = np.asarray(row, dtype=np.float32)
+            W2[i, i + 1:] = row
+            W2[i + 1:, i] = row
         np.save(w2_path, W2)
         log.info(f"  W2 matrix saved. Range: [{W2[W2>0].min():.4f}, {W2.max():.4f}]")
 
@@ -90,7 +98,8 @@ def run(config_path="config/config.yaml"):
             G.add_edge(i, int(j_idx), weight=float(d))
 
     log.info(f"  Graph: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
-    nx.write_gpickle(G, str(out / "affective_graph.gpickle"))
+    with open(out / "affective_graph.gpickle", "wb") as f:
+        pickle.dump(G, f)
 
     # ── Ollivier-Ricci curvature ────────────────────────────────
     log.info("Computing Ollivier-Ricci curvature...")
