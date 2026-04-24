@@ -32,11 +32,8 @@ def run(config_path="config/config.yaml"):
     artemis = pd.read_csv(cfg["paths"]["artemis_csv"])
     log.info(f"  ArtEmis raw rows: {len(artemis):,}")
 
-    # Normalise painting ID: artist_name + "/" + painting_name
-    artemis["painting_id"] = (
-        artemis["artist_name"].str.strip().str.lower().str.replace(" ", "_") + "/" +
-        artemis["painting_name"].str.strip().str.lower().str.replace(" ", "_")
-    )
+    # Normalise painting ID from "painting" column (format: artist/painting_name)
+    artemis["painting_id"] = artemis["painting"].str.strip().str.lower().str.replace(" ", "_")
     # Keep only recognised emotions
     artemis = artemis[artemis["emotion"].isin(ARTEMIS_EMOTIONS)].copy()
     log.info(f"  ArtEmis after emotion filter: {len(artemis):,} rows")
@@ -73,60 +70,61 @@ def run(config_path="config/config.yaml"):
     apolo_ids = set(apolo["painting_id"].unique())
     log.info(f"  Unique APOLO paintings: {len(apolo_ids):,}")
 
-    # ── Load your multivalence scores ─────────────────────────────
-    log.info("Loading your multivalence scores...")
-    mv = pd.read_csv(cfg["paths"]["multivalence_csv"])
-    mv_id_col = next((c for c in id_col_candidates if c in mv.columns), None)
-    if mv_id_col is None:
-        log.error(f"Cannot find ID column in multivalence CSV. Columns: {list(mv.columns)}")
-        sys.exit(1)
-    mv["painting_id"] = mv[mv_id_col].astype(str).str.strip().str.lower()
-    mv_ids = set(mv["painting_id"].unique())
-    log.info(f"  Unique multivalence paintings: {len(mv_ids):,}")
+    # ── Load multivalence scores (optional) ───────────────────────
+    mv_csv = cfg["paths"].get("multivalence_csv", "")
+    mv = None
+    mv_ids = set()
+    if mv_csv and Path(mv_csv).exists():
+        log.info("Loading multivalence scores...")
+        mv = pd.read_csv(mv_csv)
+        mv_id_col = next((c for c in id_col_candidates if c in mv.columns), None)
+        if mv_id_col is None:
+            log.warning(f"Cannot find ID column in multivalence CSV. Skipping.")
+            mv = None
+        else:
+            mv["painting_id"] = mv[mv_id_col].astype(str).str.strip().str.lower()
+            mv_ids = set(mv["painting_id"].unique())
+            log.info(f"  Unique multivalence paintings: {len(mv_ids):,}")
+    else:
+        log.warning("  multivalence_csv not found — skipping multivalence scores.")
 
     # ── Validate joins ────────────────────────────────────────────
     log.info("Validating joins...")
     artemis_apolo = artemis_ids & apolo_ids
-    all_three = artemis_ids & apolo_ids & mv_ids
     log.info(f"  ArtEmis ∩ APOLO: {len(artemis_apolo):,} paintings")
-    log.info(f"  ArtEmis ∩ APOLO ∩ Multivalence: {len(all_three):,} paintings")
+    if mv_ids:
+        all_three = artemis_ids & apolo_ids & mv_ids
+        log.info(f"  ArtEmis ∩ APOLO ∩ Multivalence: {len(all_three):,} paintings")
 
     apolo_miss = apolo_ids - artemis_ids
-    mv_miss = mv_ids - artemis_ids
     miss_rate_apolo = len(apolo_miss) / max(len(apolo_ids), 1)
-    miss_rate_mv = len(mv_miss) / max(len(mv_ids), 1)
     log.info(f"  APOLO paintings not in ArtEmis: {len(apolo_miss):,} ({miss_rate_apolo:.2%})")
-    log.info(f"  Multivalence paintings not in ArtEmis: {len(mv_miss):,} ({miss_rate_mv:.2%})")
 
     MISMATCH_THRESHOLD = 0.001  # 0.1%
     if miss_rate_apolo > MISMATCH_THRESHOLD:
         log.warning(f"  APOLO mismatch rate {miss_rate_apolo:.2%} exceeds {MISMATCH_THRESHOLD:.2%} threshold.")
         log.warning("  Investigate before proceeding. Check painting_id normalisation.")
-    if miss_rate_mv > MISMATCH_THRESHOLD:
-        log.warning(f"  Multivalence mismatch rate {miss_rate_mv:.2%} exceeds threshold.")
+    miss_rate_mv = 0.0
+    if mv_ids:
+        mv_miss = mv_ids - artemis_ids
+        miss_rate_mv = len(mv_miss) / max(len(mv_ids), 1)
+        log.info(f"  Multivalence paintings not in ArtEmis: {len(mv_miss):,} ({miss_rate_mv:.2%})")
+        if miss_rate_mv > MISMATCH_THRESHOLD:
+            log.warning(f"  Multivalence mismatch rate {miss_rate_mv:.2%} exceeds threshold.")
 
     # ── WikiArt movement coverage ──────────────────────────────────
-    log.info("Checking WikiArt movement metadata coverage...")
-    wikiart_meta = pd.read_csv(cfg["paths"]["wikiart_metadata"])
-    wikiart_meta["painting_id"] = (
-        wikiart_meta.get("artist_name", wikiart_meta.get("artist", "")).astype(str)
-        .str.strip().str.lower().str.replace(" ", "_") + "/" +
-        wikiart_meta.get("painting_name", wikiart_meta.get("painting", "")).astype(str)
-        .str.strip().str.lower().str.replace(" ", "_")
-    )
-    # Check movement column
-    movement_col = next((c for c in ["style", "movement", "genre", "art_movement"] if c in wikiart_meta.columns), None)
-    if movement_col is None:
-        log.error(f"Cannot find movement column in WikiArt metadata. Columns: {list(wikiart_meta.columns)}")
-        sys.exit(1)
-
-    wikiart_meta = wikiart_meta[wikiart_meta[movement_col].notna()].copy()
-    wikiart_meta["movement"] = wikiart_meta[movement_col].astype(str).str.strip()
-    wikiart_ids_with_movement = set(wikiart_meta["painting_id"].unique())
-
-    artemis_with_movement = artemis_ids & wikiart_ids_with_movement
-    coverage_rate = len(artemis_with_movement) / max(len(artemis_ids), 1)
-    log.info(f"  WikiArt movement coverage: {len(artemis_with_movement):,} / {len(artemis_ids):,} = {coverage_rate:.2%}")
+    # ArtEmis v0 already contains art_style — use it directly.
+    log.info("Checking WikiArt movement coverage from ArtEmis art_style column...")
+    if "art_style" in artemis.columns:
+        has_style = artemis[artemis["art_style"].notna() & (artemis["art_style"].astype(str).str.strip() != "")]
+        wikiart_ids_with_movement = set(has_style["painting_id"].unique())
+        artemis_with_movement = artemis_ids & wikiart_ids_with_movement
+        coverage_rate = len(artemis_with_movement) / max(len(artemis_ids), 1)
+        log.info(f"  WikiArt movement coverage: {len(artemis_with_movement):,} / {len(artemis_ids):,} = {coverage_rate:.2%}")
+    else:
+        wikiart_ids_with_movement = set()
+        coverage_rate = 0.0
+        log.warning("  art_style column not found in ArtEmis — defaulting to Path B.")
 
     threshold = cfg["phase1"]["coverage_threshold"]
     path = "A" if coverage_rate >= threshold else "B"
@@ -165,16 +163,19 @@ def run(config_path="config/config.yaml"):
 
     grouped["entropy"] = grouped["mu"].apply(entropy)
 
-    # Attach movement if Path A
+    # Attach movement if Path A (use art_style from ArtEmis directly)
     if path == "A":
-        movement_map = wikiart_meta.set_index("painting_id")["movement"].to_dict()
-        grouped["movement"] = grouped["painting_id"].map(movement_map).fillna("unknown")
+        style_map = artemis.drop_duplicates("painting_id").set_index("painting_id")["art_style"].to_dict()
+        grouped["movement"] = grouped["painting_id"].map(style_map).fillna("unknown")
     else:
         grouped["movement"] = "unknown"
 
-    # Attach multivalence scores
-    mv_map = mv.set_index("painting_id").iloc[:, 0].to_dict()  # first non-id column
-    grouped["multivalence_score"] = grouped["painting_id"].map(mv_map)
+    # Attach multivalence scores (optional)
+    if mv is not None:
+        mv_map = mv.set_index("painting_id").iloc[:, 0].to_dict()
+        grouped["multivalence_score"] = grouped["painting_id"].map(mv_map)
+    else:
+        grouped["multivalence_score"] = float("nan")
 
     # Save
     out_path = out / "unified_dataset.parquet"
@@ -188,7 +189,7 @@ def run(config_path="config/config.yaml"):
         "n_artemis_paintings": len(artemis_ids),
         "n_apolo_paintings": len(apolo_ids),
         "n_mv_paintings": len(mv_ids),
-        "n_overlap_all_three": len(all_three),
+        "n_overlap_artemis_apolo": len(artemis_apolo),
         "apolo_mismatch_rate": miss_rate_apolo,
         "mv_mismatch_rate": miss_rate_mv,
         "warnings": []

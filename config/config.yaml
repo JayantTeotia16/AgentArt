@@ -11,7 +11,7 @@ paths:
   artemis_csv:       "/data/artemis/artemis_dataset_release_v0.csv"   # ArtEmis CSV
   apolo_dir:         "/data/apolo/"                                    # APOLO root dir
   wikiart_images:    "/data/wikiart/images/"                           # WikiArt image root
-  wikiart_metadata:  "/data/wikiart/wikiart_metadata.csv"             # WikiArt movement CSV
+  wikiart_metadata:  ""                                               # WikiArt movement CSV (optional — leave blank to default to Path B)
   multivalence_csv:  "/data/your_multivalence_scores.csv"             # Your prior research scores
   output_dir:        "/data/outputs/affective_manifold/"               # All outputs go here
 
