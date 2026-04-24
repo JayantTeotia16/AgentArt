@@ -8,12 +8,12 @@
 # DATA PATHS — edit these to match your filesystem
 # -----------------------------------------------------------------------------
 paths:
-  artemis_csv:       "/data/artemis/artemis_dataset_release_v0.csv"   # ArtEmis CSV
-  apolo_dir:         "/data/apolo/"                                    # APOLO root dir
-  wikiart_images:    "/data/wikiart/images/"                           # WikiArt image root
+  artemis_csv:       "../ARTemo/artemis_v1/artemis_dataset_release_v0.csv"   # ArtEmis CSV
+  apolo_dir:         "../Artemoapolo/"                                    # APOLO root dir
+  wikiart_images:    "../wikiart/"                           # WikiArt image root
   wikiart_metadata:  ""                                               # WikiArt movement CSV (optional — leave blank to default to Path B)
   multivalence_csv:  "/data/your_multivalence_scores.csv"             # Your prior research scores
-  output_dir:        "/data/outputs/affective_manifold/"               # All outputs go here
+  output_dir:        "affective_manifold/"               # All outputs go here
 
 # -----------------------------------------------------------------------------
 # PHASE 1 — DATA PIPELINE AND AFFECTIVE GEOMETRY
