@@ -43,7 +43,7 @@ def run(config_path="config/config.yaml"):
     # ── Load APOLO ────────────────────────────────────────────────
     log.info("Loading APOLO...")
     apolo_dir = Path(cfg["paths"]["apolo_dir"])
-    id_col_candidates = ["painting_id", "image_id", "artwork_id", "id"]
+    id_col_candidates = ["painting_id", "painting", "image_id", "artwork_id", "id"]
     apolo_files = list(apolo_dir.glob("**/*.csv")) + list(apolo_dir.glob("**/*.json"))
     IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
