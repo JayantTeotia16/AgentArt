@@ -43,31 +43,40 @@ def run(config_path="config/config.yaml"):
     # ── Load APOLO ────────────────────────────────────────────────
     log.info("Loading APOLO...")
     apolo_dir = Path(cfg["paths"]["apolo_dir"])
-    apolo_files = list(apolo_dir.glob("**/*.csv")) + list(apolo_dir.glob("**/*.json"))
-    if not apolo_files:
-        log.error(f"No APOLO files found in {apolo_dir}. Check your config.")
-        sys.exit(1)
-
-    apolo_frames = []
-    for f in apolo_files:
-        try:
-            if f.suffix == ".csv":
-                apolo_frames.append(pd.read_csv(f))
-            else:
-                apolo_frames.append(pd.read_json(f))
-        except Exception as e:
-            log.warning(f"  Could not load {f}: {e}")
-    apolo = pd.concat(apolo_frames, ignore_index=True)
-    log.info(f"  APOLO raw rows: {len(apolo):,}")
-
-    # Normalise APOLO painting ID (adapt column names to your APOLO version)
     id_col_candidates = ["painting_id", "image_id", "artwork_id", "id"]
-    apolo_id_col = next((c for c in id_col_candidates if c in apolo.columns), None)
-    if apolo_id_col is None:
-        log.error(f"Cannot find ID column in APOLO. Columns: {list(apolo.columns)}")
-        sys.exit(1)
-    apolo["painting_id"] = apolo[apolo_id_col].astype(str).str.strip().str.lower()
-    apolo_ids = set(apolo["painting_id"].unique())
+    apolo_files = list(apolo_dir.glob("**/*.csv")) + list(apolo_dir.glob("**/*.json"))
+    IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
+
+    if apolo_files:
+        apolo_frames = []
+        for f in apolo_files:
+            try:
+                if f.suffix == ".csv":
+                    apolo_frames.append(pd.read_csv(f))
+                else:
+                    apolo_frames.append(pd.read_json(f))
+            except Exception as e:
+                log.warning(f"  Could not load {f}: {e}")
+        apolo = pd.concat(apolo_frames, ignore_index=True)
+        log.info(f"  APOLO raw rows: {len(apolo):,}")
+        apolo_id_col = next((c for c in id_col_candidates if c in apolo.columns), None)
+        if apolo_id_col is None:
+            log.error(f"Cannot find ID column in APOLO. Columns: {list(apolo.columns)}")
+            sys.exit(1)
+        apolo["painting_id"] = apolo[apolo_id_col].astype(str).str.strip().str.lower()
+        apolo_ids = set(apolo["painting_id"].unique())
+    else:
+        # No metadata files — derive IDs from image filenames (style/painting.ext layout)
+        log.warning("  No APOLO CSV/JSON found. Deriving painting IDs from image filenames.")
+        image_files = [f for f in apolo_dir.glob("**/*") if f.suffix.lower() in IMAGE_EXTS]
+        apolo_ids = set()
+        for f in image_files:
+            # Use relative path without extension as painting_id
+            rel = f.relative_to(apolo_dir)
+            pid = str(rel.with_suffix("")).strip().lower().replace(" ", "_")
+            apolo_ids.add(pid)
+        log.info(f"  APOLO images found: {len(apolo_ids):,}")
+
     log.info(f"  Unique APOLO paintings: {len(apolo_ids):,}")
 
     # ── Load multivalence scores (optional) ───────────────────────
