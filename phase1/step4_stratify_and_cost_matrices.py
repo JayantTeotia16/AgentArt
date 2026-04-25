@@ -14,34 +14,46 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from scipy.spatial.distance import jensenshannon
 from utils.common import load_config, get_output_dir, setup_logger, save_json, ARTEMIS_EMOTIONS
 
 def compute_jsd_matrix(mu_matrix):
-    """Compute full pairwise JSD distance matrix."""
-    n = len(mu_matrix)
-    jsd = np.zeros((n, n), dtype=np.float32)
-    for i in range(n):
-        for j in range(i+1, n):
-            d = jensenshannon(mu_matrix[i], mu_matrix[j])
-            jsd[i, j] = jsd[j, i] = float(d)
-    return jsd
+    """Compute full pairwise JSD distance matrix (vectorized via scipy cdist)."""
+    from scipy.spatial.distance import cdist
+    # cdist jensenshannon is available in scipy >= 1.7
+    return cdist(mu_matrix, mu_matrix, metric="jensenshannon").astype(np.float32)
+
+# Max size for exact k-medoids; larger datasets are subsampled then assigned
+_KMEDOIDS_MAX = 5000
 
 def jsd_kmedoids(mu_matrix, k, max_iter=100, random_state=42):
-    """JSD k-medoids clustering on the probability simplex."""
+    """JSD k-medoids clustering. Subsamples if n > _KMEDOIDS_MAX for tractability."""
+    from scipy.spatial.distance import cdist
     rng = np.random.RandomState(random_state)
     n = len(mu_matrix)
-    # Compute pairwise JSD
+
+    if n > _KMEDOIDS_MAX:
+        # Cluster on a random subset, then assign all points to nearest medoid
+        sub_idx = rng.choice(n, size=_KMEDOIDS_MAX, replace=False)
+        sub_mu = mu_matrix[sub_idx]
+        sub_labels, sub_medoid_local = jsd_kmedoids(sub_mu, k, max_iter, random_state)
+        medoid_vecs = sub_mu[sub_medoid_local]
+        # Assign all n points to nearest medoid in batches
+        batch = 2000
+        labels = np.empty(n, dtype=int)
+        for start in range(0, n, batch):
+            end = min(start + batch, n)
+            D_batch = cdist(mu_matrix[start:end], medoid_vecs, metric="jensenshannon")
+            labels[start:end] = D_batch.argmin(axis=1)
+        medoid_idxs = sub_idx[sub_medoid_local]
+        return labels, medoid_idxs
+
     D = compute_jsd_matrix(mu_matrix)
-    # Initialise medoids randomly
     medoid_idxs = rng.choice(n, size=k, replace=False)
     labels = np.zeros(n, dtype=int)
 
-    for iteration in range(max_iter):
-        # Assign each point to nearest medoid
-        for i in range(n):
-            dists = [D[i, m] for m in medoid_idxs]
-            labels[i] = int(np.argmin(dists))
+    for _ in range(max_iter):
+        # Assign: vectorized
+        labels = D[:, medoid_idxs].argmin(axis=1)
 
         # Update medoids
         new_medoids = []
@@ -50,14 +62,14 @@ def jsd_kmedoids(mu_matrix, k, max_iter=100, random_state=42):
             if len(cluster_idxs) == 0:
                 new_medoids.append(medoid_idxs[c])
                 continue
-            # New medoid: point with min sum of distances to cluster members
             sub_D = D[np.ix_(cluster_idxs, cluster_idxs)]
-            best_local = int(np.argmin(sub_D.sum(axis=1)))
+            best_local = int(sub_D.sum(axis=1).argmin())
             new_medoids.append(cluster_idxs[best_local])
 
-        if new_medoids == list(medoid_idxs):
+        new_medoids = np.array(new_medoids)
+        if np.array_equal(new_medoids, medoid_idxs):
             break
-        medoid_idxs = np.array(new_medoids)
+        medoid_idxs = new_medoids
 
     return labels, medoid_idxs
 
@@ -155,10 +167,7 @@ def run(config_path="config/config.yaml"):
     # C: Data-driven from ArtEmis co-occurrence
     log.info("  Building data-driven cost matrix from ArtEmis co-occurrence...")
     artemis = pd.read_csv(cfg["paths"]["artemis_csv"])
-    artemis["painting_id"] = (
-        artemis["artist_name"].str.strip().str.lower().str.replace(" ", "_") + "/" +
-        artemis["painting_name"].str.strip().str.lower().str.replace(" ", "_")
-    )
+    artemis["painting_id"] = artemis["painting"].str.strip().str.lower().str.replace(" ", "_")
     from utils.common import EMOTION_IDX
     cooccur = np.zeros((8, 8))
     for pid, grp in artemis.groupby("painting_id"):
